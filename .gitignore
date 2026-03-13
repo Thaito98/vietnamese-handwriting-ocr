@@ -36,6 +36,15 @@ test_out.txt
 output/
 outputs/
 
+# Sample / test images
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.gif
+*.tiff
+*.webp
+
 # OS
 .DS_Store
 Thumbs.db
