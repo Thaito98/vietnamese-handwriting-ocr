@@ -1,5 +1,5 @@
 """
-EasyOCR detector – chỉ dùng phần phát hiện (recognizer=False).
+EasyOCR detector - chỉ dùng phần phát hiện (recognizer=False).
 Trả về danh sách (x1, y1, x2, y2) theo tọa độ pixel.
 """
 from __future__ import annotations
