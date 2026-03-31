@@ -39,7 +39,7 @@ ocr_web/
         └── tokenizer_config.json
 ```
 
-> **Note:** Model weight files (`.pt`, `.bin`, `.safetensors`) are not included in this repository due to file size. Download them separately and place them in `models/best_model/`.
+> **Note:** Model weight files are managed via **Git LFS**. When cloning, make sure **Git LFS** is installed so the large files (e.g. `model.safetensors`) download correctly.
 
 ## Requirements
 
@@ -68,6 +68,7 @@ Place the TrOCR model weights (and any required tokenizer/model files) in `model
 | File | Description |
 |---|---|
 | `pytorch_model.bin` or `model.safetensors` | TrOCR encoder-decoder weights |
+| `tone_spatial.pt` | (Optional) weights for tone module (if you later re-enable it) |
 
 ## Usage
 
