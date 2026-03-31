@@ -8,15 +8,17 @@ The pipeline consists of two stages:
 
 1. **Text Detection** — Locates text regions in an uploaded image using either EasyOCR or PaddleOCR.
 
-2. **Text Recognition** — Reads each word crop using a `VisionEncoderDecoderModel` (ViT encoder + TrOCR decoder) fine-tuned on the VNOnDB Vietnamese handwriting dataset. A custom `ToneSpatialGate` module (Channel Attention + Spatial Attention) is injected as a forward hook on the encoder output to improve accuracy on Vietnamese tone marks (diacritics).
+2. **Text Recognition** — Reads each word crop using a `VisionEncoderDecoderModel` (ViT encoder + TrOCR decoder) fine-tuned on the VNOnDB Vietnamese handwriting dataset.
 
 ## Features
 
 - Two detector options: EasyOCR and PaddleOCR
+- Detection threshold tuning (different for EasyOCR / PaddleOCR)
 - Configurable beam search (1-8 beams)
 - Adjustable padding around crops
+- Optional crop enhancement (`Tăng cường crop`) for handwritten/blue-pen notebook domain
 - Annotated output image with labeled bounding boxes
-- Combined text output, per-word crop grid, and summary DataFrame
+- Combined text output, per-crop preview, and summary DataFrame
 - Built-in usage guide in the web interface
 
 ## Project Structure
@@ -61,12 +63,11 @@ pip install -r requirements.txt
 
 ## Model Weights
 
-Place the following files in `models/best_model/`:
+Place the TrOCR model weights (and any required tokenizer/model files) in `models/best_model/`.
 
 | File | Description |
 |---|---|
 | `pytorch_model.bin` or `model.safetensors` | TrOCR encoder-decoder weights |
-| `tone_spatial.pt` | ToneSpatialGate weights |
 
 ## Usage
 
@@ -74,16 +75,18 @@ Place the following files in `models/best_model/`:
 streamlit run app.py
 ```
 
-Open the URL shown in the terminal (default `http://localhost:8501`), upload an image (JPG, PNG, BMP), configure the sidebar options, and click **Nhan dang**.
+Open the URL shown in the terminal (default `http://localhost:8501`), upload an image (JPG, PNG, BMP), configure the sidebar options, and click **Nhận dạng**.
 
 ## Configuration
 
 | Option | Description |
 |---|---|
 | Detector | EasyOCR or PaddleOCR |
+| Ngưỡng phát hiện | Tuning per detector when detection is weak |
 | Padding H | Horizontal padding around each crop (px) |
 | Padding V | Vertical padding as % of crop height |
 | Beam search | Number of beams for decoding (1 = greedy, max 8) |
+| Tăng cường crop | Optional enhancement for blue-pen / notebook domain |
 
 ## License
 

@@ -1,8 +1,3 @@
-"""
-OCR Web - Streamlit
-Phát hiện chữ: EasyOCR | PaddleOCR
-Nhận dạng    : TrOCR fine-tuned (VNOnDB) + ToneSpatialGate + ToneAwareLoss
-"""
 import sys
 import os
 
@@ -15,11 +10,9 @@ import cv2
 import numpy as np
 import streamlit as st
 import torch
-import torch.nn as nn
 from PIL import Image, ImageDraw, ImageFont
 from transformers import GenerationConfig, TrOCRProcessor, VisionEncoderDecoderModel
 
-# ĐƯỜNG DẪN MODEL
 MODEL_DIR = Path(__file__).parent / "models" / "best_model"
 
 COLORS = {
@@ -28,52 +21,7 @@ COLORS = {
 }
 
 
-# MODULE: ToneSpatialGate
-# Kết hợp Channel Attention + Spatial Attention
-# Dựa trên SE-Net (channel) và CBAM (spatial),
-# điều chỉnh cho Transformer và dấu thanh tiếng Việt.
-class ToneSpatialGate(nn.Module):
-    def __init__(self, hidden_dim: int = 768):
-        super().__init__()
-        self.channel_gate = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 4),
-            nn.GELU(),
-            nn.Dropout(0.1),
-            nn.Linear(hidden_dim // 4, hidden_dim),
-            nn.Sigmoid()
-        )
-        self.spatial_gate = nn.Sequential(
-            nn.Linear(hidden_dim, 1),
-            nn.Sigmoid()
-        )
-        self.norm = nn.LayerNorm(hidden_dim)
-
-    def forward(self, x):
-        ch = self.channel_gate(x)
-        sp = self.spatial_gate(x)
-        gate = ch * sp
-        return self.norm(x + x * gate)
-
-
-# TIỀN XỬ LÝ: Loại bỏ đường kẻ ô ly
 def remove_grid_lines(image_np: np.ndarray) -> np.ndarray:
-    """
-    Loại đường kẻ ngang + dọc trên vở ô ly,
-    giữ lại chữ viết tay.
-
-    Quy trình:
-    1. Chuyển grayscale
-    2. Adaptive threshold -> ảnh nhị phân (chữ = đen, nền = trắng)
-    3. Dùng morphological open với kernel ngang dài -> tìm đường ngang
-    4. Dùng morphological open với kernel dọc dài -> tìm đường dọc
-    5. Gộp đường ngang + dọc -> mask đường kẻ
-    6. Dilate mask nhẹ (để phủ hết đường kẻ, kể cả nét đứt)
-    7. Inpaint vùng đường kẻ -> "xóa" đường kẻ, giữ chữ
-    8. Chuyển lại RGB
-
-    Kết quả: ảnh gần giống nền trắng chữ đen (domain train)
-    """
-    # 1) Grayscale
     if len(image_np.shape) == 3:
         gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
     else:
@@ -81,80 +29,51 @@ def remove_grid_lines(image_np: np.ndarray) -> np.ndarray:
 
     h, w = gray.shape
 
-    # 2) Adaptive threshold: chữ = 0 (đen), nền = 255 (trắng)
-    #    THRESH_BINARY_INV: đảo → chữ + đường kẻ = trắng (255), nền = đen (0)
     binary = cv2.adaptiveThreshold(
         gray, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY_INV,
         blockSize=15, C=10
     )
-
-    # 3) Tìm đường ngang: kernel rộng, cao 1px
-    #    Chiều dài kernel = 1/4 chiều rộng ảnh → chỉ bắt đường kẻ dài
     horizontal_kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT, (max(w // 4, 30), 1)
     )
     horizontal_lines = cv2.morphologyEx(
         binary, cv2.MORPH_OPEN, horizontal_kernel, iterations=1
     )
-
-    # 4) Tìm đường dọc: kernel cao, rộng 1px
     vertical_kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT, (1, max(h // 4, 30))
     )
     vertical_lines = cv2.morphologyEx(
         binary, cv2.MORPH_OPEN, vertical_kernel, iterations=1
     )
-
-    # 5) Gộp
     grid_mask = cv2.add(horizontal_lines, vertical_lines)
-
-    # 6) Dilate nhẹ: phủ rộng thêm 2px quanh đường kẻ
-    #    Giúp xóa cả đường kẻ nét đứt (các đoạn ngắn cách nhau)
     dilate_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     grid_mask = cv2.dilate(grid_mask, dilate_kernel, iterations=1)
-
-    # 7) Inpaint: "vá" vùng đường kẻ bằng pixel xung quanh
-    #    Ưu điểm so với đơn giản fill trắng: giữ lại nét chữ bị đè lên đường kẻ
     cleaned = cv2.inpaint(gray, grid_mask, inpaintRadius=2, flags=cv2.INPAINT_NS)
-
-    # 8) Chuyển RGB
     cleaned_rgb = cv2.cvtColor(cleaned, cv2.COLOR_GRAY2RGB)
 
     return cleaned_rgb
 
 
 def enhance_for_ocr(image_np: np.ndarray) -> np.ndarray:
-    """
-    Tăng cường ảnh cho OCR:
-    - Tăng contrast (CLAHE)
-    - Giảm nhiễu nhẹ
-    Áp dụng sau khi loại đường kẻ (nếu có) hoặc dùng độc lập.
-    """
     if len(image_np.shape) == 3:
         gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
     else:
         gray = image_np.copy()
-
-    # CLAHE: tăng contrast cục bộ
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     enhanced = clahe.apply(gray)
-
-    # Giảm nhiễu nhẹ (giữ nét chữ)
     enhanced = cv2.fastNlMeansDenoising(enhanced, h=10)
 
     return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2RGB)
 
 
-# TIỆN ÍCH
 def pil_to_bytes(img: Image.Image) -> bytes:
     buf = io.BytesIO()
     img.convert("RGB").save(buf, format="PNG")
     return buf.getvalue()
 
 
-# LOAD MODEL
 @st.cache_resource(show_spinner="Đang tải mô hình TrOCR…")
 def load_trocr():
     if not MODEL_DIR.exists():
@@ -169,37 +88,10 @@ def load_trocr():
     device    = "cuda" if torch.cuda.is_available() else "cpu"
     model     = model.to(device)
 
-    # Load ToneSpatialGate
-    gate_path = MODEL_DIR / "tone_spatial.pt"
-    if gate_path.exists():
-        tone_spatial = ToneSpatialGate(hidden_dim=768).to(device)
-        tone_spatial.load_state_dict(
-            torch.load(str(gate_path), map_location=device, weights_only=True)
-        )
-        tone_spatial.eval()
-
-        def _encoder_hook(module, input, output):
-            output.last_hidden_state = tone_spatial(output.last_hidden_state)
-            return output
-
-        model.encoder.register_forward_hook(_encoder_hook)
-        print("ToneSpatialGate loaded!")
-    else:
-        # Fallback: thử load ToneAttentionGate cũ
-        old_gate_path = MODEL_DIR / "tone_gate.pt"
-        if old_gate_path.exists():
-            st.warning(
-                "Tìm thấy tone_gate.pt (phiên bản cũ). "
-                "Hãy train lại với ToneSpatialGate để có kết quả tốt hơn."
-            )
-        else:
-            st.warning("Không tìm thấy tone_spatial.pt - chạy không có module gate")
-
     model.eval()
     return processor, model, device
 
 
-# LOAD DETECTOR
 @st.cache_resource(show_spinner="Đang tải detector…")
 def load_detector(
     name: str,
@@ -222,7 +114,6 @@ def load_detector(
     raise ValueError(f"Detector không hợp lệ: {name}")
 
 
-# PHÁT HIỆN VÙNG CHỮ
 def detect_boxes(
     detector_obj, detector_name: str, image_np: np.ndarray,
     text_threshold: float = 0.7,
@@ -252,7 +143,6 @@ def detect_boxes(
                 x2, y2 = int(pts[:, 0].max()), int(pts[:, 1].max())
                 boxes.append((x1, y1, x2, y2))
 
-    # Sắp xếp: trên→dưới, trái→phải
     if boxes:
         if len(boxes) > 1:
             avg_h = np.mean([b[3] - b[1] for b in boxes])
@@ -266,7 +156,6 @@ def detect_boxes(
     return boxes
 
 
-# NHẬN DẠNG 1 CROP
 def recognize_crop(
     crop     : Image.Image,
     processor: TrOCRProcessor,
@@ -280,7 +169,6 @@ def recognize_crop(
     return processor.batch_decode(ids, skip_special_tokens=True)[0]
 
 
-# VẼ BOUNDING BOX
 def draw_boxes(
     image : Image.Image,
     boxes : list,
@@ -303,28 +191,17 @@ def draw_boxes(
     return img
 
 
-# TĂNG CƯỜNG CROP (áp dụng SAU detect, TRƯỚC TrOCR)
-# Dùng HSV Saturation + Otsu để tách mực bút (saturation cao)
-# khỏi đường kẻ nhạt và nền (saturation thấp).
-# Kết quả: nền trắng chữ đen → khớp domain train VNOnDB.
-#
-# ĐỂ VÔ HIỆU HÓA: comment từ dòng này đến hết hàm enhance_crop_for_trocr
 def enhance_crop_for_trocr(crop: Image.Image) -> Image.Image:
     arr = np.array(crop.convert("RGB"))
     hsv = cv2.cvtColor(arr, cv2.COLOR_RGB2HSV)
-    s   = hsv[:, :, 1]   # saturation: bút (xanh/đen) cao, đường kẻ nhạt thấp
-    # Otsu tự tìm ngưỡng tối ưu giữa mực và nền+đường kẻ
+    s   = hsv[:, :, 1]
     _, mask = cv2.threshold(s, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    # Dilate nhẹ để điền đầy nét chữ bị thiếu
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
     mask   = cv2.dilate(mask, kernel, iterations=1)
-    # Đảo: chữ = đen, nền = trắng (khớp domain train)
     result = cv2.bitwise_not(mask)
     return Image.fromarray(cv2.cvtColor(result, cv2.COLOR_GRAY2RGB))
-# KẾT THÚC KHỐI enhance_crop_for_trocr
 
 
-# GIAO DIỆN STREAMLIT
 def main():
     st.set_page_config(
         page_title="OCR Chữ Viết Tay Tiếng Việt",
@@ -333,8 +210,7 @@ def main():
 
     st.title("Nhận Dạng Chữ Viết Tay Tiếng Việt")
     st.markdown(
-        "Mô hình **TrOCR + ToneSpatialGate + ToneAwareLoss** "
-        "fine-tuned trên **VNOnDB**. "
+        "Mô hình **TrOCR** fine-tuned trên **VNOnDB**."
         "Chọn bộ phát hiện văn bản rồi tải ảnh lên."
     )
 
@@ -362,9 +238,6 @@ def main():
         pad_bot = st.slider("Dọc phía dưới (% height)", 0, 100,  60)
 
         st.divider()
-
-        # ĐỂ VÔ HIỆU HÓA toggle này: comment 3 dòng dưới (st.subheader + st.toggle)
-        # và thêm dòng: enhance_crop = False
         st.subheader("Tăng cường crop")
         enhance_crop = st.toggle(
             "Bật tăng cường (bút xanh / vở ô ly)",
@@ -418,7 +291,6 @@ def main():
         )
 
 
-    # Upload 
     uploaded = st.file_uploader(
         "Tải ảnh lên (jpg / jpeg / png / bmp)",
         type=["jpg", "jpeg", "png", "bmp"],
@@ -436,7 +308,6 @@ def main():
         )
         return
 
-    # Load models 
     processor, model, device = load_trocr()
 
     try:
@@ -454,21 +325,17 @@ def main():
         )
         return
 
-    # Đọc ảnh 
     image_bytes = uploaded.read()
     image       = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     image_np    = np.array(image)
     h_img, w_img = image_np.shape[:2]
 
-    # Hiển thị ảnh gốc 
     st.image(pil_to_bytes(image), caption="Ảnh gốc", width="stretch")
 
-    # Tiền xử lý 
     processed_np = image_np.copy()
 
     processed_image = Image.fromarray(processed_np)
 
-    # Nút xử lý 
     if not st.button("Nhận dạng", type="primary", width="stretch"):
         return
 
@@ -481,7 +348,6 @@ def main():
         pad_token_id           = processor.tokenizer.pad_token_id,
     )
 
-    # Phát hiện (trên ảnh đã tiền xử lý) 
     detect_np = np.array(processed_image)
     h_proc, w_proc = detect_np.shape[:2]
 
@@ -503,7 +369,6 @@ def main():
 
     st.success(f"Phát hiện **{len(boxes)}** vùng chữ bằng **{detector_name}**")
 
-    # Nhận dạng từng vùng (crop từ ảnh đã xử lý)
     results  = []
     progress = st.progress(0, text="Đang nhận dạng…")
 
@@ -516,7 +381,6 @@ def main():
         cy2 = min(h_proc, y2 + int(h_box * pad_bot / 100))
 
         crop = processed_image.crop((cx1, cy1, cx2, cy2))
-        # ĐỂ VÔ HIỆU HÓA tăng cường: comment 2 dòng dưới
         if enhance_crop:
             crop = enhance_crop_for_trocr(crop)
         text = recognize_crop(crop, processor, model, device, gen_cfg)
@@ -533,7 +397,6 @@ def main():
 
     progress.empty()
 
-    # Hiển thị ảnh kết quả 
     st.subheader("Kết quả phát hiện & nhận dạng")
     annotated = draw_boxes(
         processed_image,
@@ -543,12 +406,10 @@ def main():
     )
     st.image(pil_to_bytes(annotated), caption="Ảnh kết quả", width="stretch")
 
-    # Văn bản đầy đủ 
     full_text = " ".join(r["text"] for r in results)
     st.subheader("Văn bản nhận dạng được")
     st.text_area("Văn bản", full_text, height=120, label_visibility="collapsed")
 
-    # Chi tiết từng vùng 
     st.subheader("Chi tiết từng vùng")
     cols_per_row = 4
     for row_start in range(0, len(results), cols_per_row):
@@ -559,7 +420,6 @@ def main():
                 st.image(pil_to_bytes(r["crop"]), width="stretch")
                 st.caption(f'**"{r["text"]}"**')
 
-    # Bảng tổng hợp 
     with st.expander("Bảng tổng hợp kết quả"):
         import pandas as pd
         df = pd.DataFrame([

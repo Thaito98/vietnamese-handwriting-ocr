@@ -1,7 +1,3 @@
-"""
-EasyOCR detector - chỉ dùng phần phát hiện (recognizer=False).
-Trả về danh sách (x1, y1, x2, y2) theo tọa độ pixel.
-"""
 from __future__ import annotations
 import numpy as np
 
@@ -17,18 +13,8 @@ def _get_reader():
 
 
 def detect(image_np: np.ndarray) -> list[tuple[int, int, int, int]]:
-    """
-    Parameters
-    ----------
-    image_np : np.ndarray  shape (H, W, 3) RGB uint8
-
-    Returns
-    -------
-    list of (x1, y1, x2, y2)
-    """
     reader = _get_reader()
     bounds = reader.detect(image_np)
-    # bounds[0][0] là horizontal_list: mỗi phần tử [x_min, x_max, y_min, y_max]
     boxes: list[tuple[int, int, int, int]] = []
     if bounds and bounds[0] and bounds[0][0]:
         for b in bounds[0][0]:
