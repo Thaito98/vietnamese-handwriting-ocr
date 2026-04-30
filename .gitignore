@@ -26,9 +26,6 @@ ENV/
 *.ckpt
 *.onnx
 
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb
 
 # Test / debug outputs
 test_out.txt
@@ -62,3 +59,4 @@ desktop.ini
 
 # Streamlit
 .streamlit/secrets.toml
+Huong_Dan_Su_Dung.txt 
